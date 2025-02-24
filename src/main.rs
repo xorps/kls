@@ -1,18 +1,28 @@
-use std::convert::identity;
+mod docker;
+mod k8s;
 
 use clap::{Parser, ValueEnum};
+use k8s::{list_daemonsets, list_deployments, list_pods, list_statefulsets};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
     #[arg(short, long, value_enum)]
     target: Kind,
+
+    #[arg(short, long, value_enum, default_value_t = Filter::All)]
+    filter: Filter,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
 enum Kind {
     Pod,
     Workload,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum Filter {
+    All,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -28,62 +38,46 @@ fn main() -> anyhow::Result<()> {
 async fn run(arg: Args) -> anyhow::Result<()> {
     let client = kube::Client::try_default().await?;
 
+    let filter = match arg.filter {
+        Filter::All => |_: &str| true,
+    };
+
     match arg.target {
         Kind::Pod => {
-            let _pods = list_pods(client).await?;
+            let pods = list_pods(client, filter).await?;
+            let pods = pods
+                .into_iter()
+                .map(|p| p.show())
+                .collect::<Vec<_>>()
+                .join("\n");
+            println!("Pods:\n{}", pods);
             Ok(())
         }
-        _ => Ok(())
+        Kind::Workload => {
+            let (deploy, ds, sts) = tokio::try_join!(
+                list_deployments(client.clone(), filter),
+                list_daemonsets(client.clone(), filter),
+                list_statefulsets(client, filter),
+            )?;
+            let deploy = deploy
+                .into_iter()
+                .map(|d| d.show())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let ds = ds
+                .into_iter()
+                .map(|d| d.show())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let sts = sts
+                .into_iter()
+                .map(|d| d.show())
+                .collect::<Vec<_>>()
+                .join("\n");
+            println!("Deployments:\n{}", deploy);
+            println!("DaemonSets:\n{}", ds);
+            println!("StateFulSets:\n{}", sts);
+            Ok(())
+        }
     }
-}
-
-struct Pod {
-    namespace: String,
-    name: String,
-    image: String,
-}
-
-async fn list_pods(client: kube::Client) -> anyhow::Result<Vec<Pod>> {
-    let api: kube::Api<k8s_openapi::api::core::v1::Pod> = kube::Api::all(client);
-
-    let pods = api.list(&Default::default()).await?;
-
-    let pods: Vec<Pod> = pods
-        .items
-        .into_iter()
-        .flat_map(|item| {
-            let name = item.metadata.name.unwrap_or_default();
-            let namespace = item.metadata.namespace.unwrap_or_default();
-            item.spec
-                .map(|spec| {
-                    let init_containers = spec
-                        .init_containers
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter_map(|c| c.image)
-                        .filter(|i| is_docker_hub(i));
-                    let containers = spec
-                        .containers
-                        .into_iter()
-                        .filter_map(|c| c.image)
-                        .filter(|i| is_docker_hub(i));
-                    let c = init_containers.chain(containers);
-                    let c: Vec<_> = c
-                        .map(|image| Pod {
-                            namespace: namespace.clone(),
-                            name: name.clone(),
-                            image,
-                        })
-                        .collect();
-                    c
-                })
-                .unwrap_or_default()
-        })
-        .collect();
-
-    Ok(pods)
-}
-
-fn is_docker_hub(image: &str) -> bool {
-    true
 }
