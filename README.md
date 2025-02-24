@@ -1,2 +1,2 @@
-# kdh
-Detect if Kubernetes is using Docker Hub Images
+# kls
+k8s utility for listing container images
