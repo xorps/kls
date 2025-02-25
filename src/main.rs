@@ -1,7 +1,8 @@
-mod docker;
+mod ecr;
 mod k8s;
 
 use clap::{Parser, ValueEnum};
+use ecr::is_ecr;
 use k8s::{list_daemonsets, list_deployments, list_pods, list_statefulsets};
 
 #[derive(Parser, Debug)]
@@ -23,6 +24,7 @@ enum Kind {
 #[derive(Clone, Debug, ValueEnum)]
 enum Filter {
     All,
+    NotEcr,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -30,8 +32,7 @@ fn main() -> anyhow::Result<()> {
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()
-        .unwrap()
+        .build()?
         .block_on(run(args))
 }
 
@@ -40,6 +41,7 @@ async fn run(arg: Args) -> anyhow::Result<()> {
 
     let filter = match arg.filter {
         Filter::All => |_: &str| true,
+        Filter::NotEcr => |image: &str| !is_ecr(image, ecr::Region::UsEast1),
     };
 
     match arg.target {
@@ -74,9 +76,9 @@ async fn run(arg: Args) -> anyhow::Result<()> {
                 .map(|d| d.show())
                 .collect::<Vec<_>>()
                 .join("\n");
-            println!("Deployments:\n{}", deploy);
-            println!("DaemonSets:\n{}", ds);
-            println!("StateFulSets:\n{}", sts);
+            println!("Deployments:\n{}\n", deploy);
+            println!("DaemonSets:\n{}\n", ds);
+            println!("StateFulSets:\n{}\n", sts);
             Ok(())
         }
     }
